@@ -1,0 +1,214 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(janitor)
+```
+# Datasets 
+
+```{r}
+community_belonging <- read_csv("data/community_belonging.csv") %>% clean_names()
+```
+
+```{r}
+green_spaces <- read_csv("data/green_spaces.csv") %>% clean_names()
+```
+
+```{r}
+neighbouhood_rating <- read_csv("data/neighbourhood_rating.csv") %>% clean_names()
+```
+
+## Notes about the datasets
+- There aren't any missing values
+- Both the neighbourhood rating and the community belonging datasets have links to the green spaces dataset, implying that there is perhaps an expected link between the distance participants had to walk to access a green space and how they rated their neighbourhood or how strongly they felt they belonged to their local community.
+- There are local authority codes, we should join on the LA names
+
+```{r}
+la_names <- read_csv("data/council_areas_2011_2019.csv") %>% clean_names()
+```
+
+
+
+```{r}
+green_spaces %>% head()
+```
+
+
+
+# Data cleaning - Green spaces
+## Join with LA names
+
+```{r}
+#drop variables not needed from LA names
+la_names <- la_names %>% select(ca, ca_name)
+
+#join green spaces
+green_spaces <- green_spaces %>% left_join(la_names, by = c("feature_code" = "ca")) %>% 
+  mutate(ca_name = if_else(is.na(ca_name), "All Scotland", ca_name)) 
+```
+
+
+## Factor the variables
+```{r}
+green_spaces <- green_spaces %>% 
+  mutate(age = factor(age, levels = c("16-34 years", "35-64 years",
+                                      "65 years and over", "All")),
+         simd_quintiles = factor(simd_quintiles, levels = c("20% most deprived",
+                                                            "80% least deprived",
+                                                            "All")),
+         distance_to_nearest_green_or_blue_space = factor(
+           distance_to_nearest_green_or_blue_space, levels = c(
+             "A 5 minute walk or less",
+             "Within a 6-10 minute walk",
+             "An 11 minute walk or more",
+             "Don't Know"
+           )
+         )) 
+```
+
+
+# Green spaces - exploratory visualisations
+
+## Make function to get demographic difference graphs
+```{r}
+get_demographic_difference_graph <- 
+  function(dataset, grouping_variable, distance_variable) {
+  
+  grouping_variable <- enquo(grouping_variable)
+  distance_variable <- enquo(distance_variable)
+  
+  dataset %>% 
+    filter(measurement == "Percent") %>% 
+    group_by(!!grouping_variable, !!distance_variable) %>% 
+    summarise(mean_percentage = mean(value)) %>% 
+    ggplot(aes(x = (!!grouping_variable),
+         y = mean_percentage,
+         fill = (!!distance_variable)))+
+    geom_col(position = "dodge")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+}
+```
+
+
+## Make function to get grouped distance means
+
+```{r}
+get_grouped_distance_means <- 
+  function(dataset, grouping_variable, distance_variable) {
+  
+  grouping_variable <- enquo(grouping_variable)
+  distance_variable <- enquo(distance_variable)
+  
+  dataset %>% 
+    filter(measurement == "Percent") %>% 
+    group_by(!!grouping_variable, !!distance_variable) %>% 
+    summarise(mean_percentage = mean(value))
+}
+```
+
+
+## Differences by age 
+```{r}
+get_grouped_distance_means(dataset = green_spaces,
+                            grouping_variable = age,
+                            distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+```{r}
+get_demographic_difference_graph(dataset = green_spaces,
+                                 grouping_variable = age,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+
+
+## Differences by sex
+
+```{r}
+get_grouped_distance_means(dataset = green_spaces,
+                            grouping_variable = gender,
+                            distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+
+```{r}
+get_demographic_difference_graph(dataset = green_spaces,
+                                 grouping_variable = gender,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+## Differences in SIMD **
+
+```{r}
+get_grouped_distance_means(dataset = green_spaces,
+                            grouping_variable = simd_quintiles,
+                            distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+
+```{r}
+get_demographic_difference_graph(dataset = green_spaces,
+                                 grouping_variable = simd_quintiles,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+
+
+## Differences in type of tenure
+
+```{r}
+get_grouped_distance_means(dataset = green_spaces,
+                                 grouping_variable = type_of_tenure,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+
+```{r}
+get_demographic_difference_graph(dataset = green_spaces,
+                                 grouping_variable = type_of_tenure,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+## Differences by household type
+
+```{r}
+get_demographic_difference_graph(dataset = green_spaces,
+                                 grouping_variable = household_type,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+## Differences by ethnicity **
+
+```{r}
+get_grouped_distance_means(dataset = green_spaces,
+                                 grouping_variable = ethnicity,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+
+```{r}
+get_demographic_difference_graph(dataset = green_spaces,
+                                 grouping_variable = ethnicity,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+## Differences by urban/rural **
+
+```{r}
+get_demographic_difference_graph(dataset = green_spaces,
+                                 grouping_variable = urban_rural_classification,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
+
+```{r}
+get_demographic_difference_graph(dataset = green_spaces,
+                                 grouping_variable = ca_name,
+                                 distance_variable = distance_to_nearest_green_or_blue_space)
+```
+
