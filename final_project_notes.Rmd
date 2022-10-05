@@ -8,6 +8,7 @@ output: html_notebook
 ```{r}
 library(tidyverse)
 library(janitor)
+library(infer)
 ```
 # Datasets 
 
@@ -23,6 +24,12 @@ green_spaces <- read_csv("data/green_spaces.csv") %>% clean_names()
 neighbouhood_rating <- read_csv("data/neighbourhood_rating.csv") %>% clean_names()
 ```
 
+```{r}
+aggregate_dataset <- read_csv("data/shs_aggregate_responses.csv") %>% clean_names()
+```
+
+
+
 ## Notes about the datasets
 - There aren't any missing values
 - Both the neighbourhood rating and the community belonging datasets have links to the green spaces dataset, implying that there is perhaps an expected link between the distance participants had to walk to access a green space and how they rated their neighbourhood or how strongly they felt they belonged to their local community.
@@ -35,9 +42,27 @@ la_names <- read_csv("data/council_areas_2011_2019.csv") %>% clean_names()
 
 
 ```{r}
-green_spaces %>% head()
+aggregate_dataset %>% head()
 ```
+```{r}
+aggregate_dataset %>% skimr::skim()
+```
+# Definitions
 
+ - Green space - A park, countryside, wood, play area, canal path, riverside or beach – not including private gardens (Scottish household                    survey, 2019)
+ - Urban/rural classification - This uses the 2 fold urban/rural Scottish classification, which defines a rural area as having a population                                 of fewer than 3000 people (Scottish Government Urban/Rural classification, 2020)                
+ 
+ 
+ Sources:
+ - Scottish government Urban/Rural classification (2020)
+ https://www.gov.scot/publications/scottish-government-urban-rural-classification-2020/pages/2/
+ - Scottish household survey questionnaire (2019)
+ https://www.gov.scot/publications/scottish-household-survey-questionnaires/
+ 
+
+# Assumptions
+
+1) Independence of observations, meaning that if we filter out the "All" values for any of the demographic variables, there are no observations that are in two categories (e.g. the participants who were in the "white" group for ethnicity aren't also being counted in the means for "other" ethnicity group)
 
 
 # Data cleaning - Green spaces
@@ -112,7 +137,7 @@ get_grouped_distance_means <-
 ```
 
 
-## Differences by age 
+## Differences by age **
 ```{r}
 get_grouped_distance_means(dataset = green_spaces,
                             grouping_variable = age,
@@ -174,7 +199,7 @@ get_demographic_difference_graph(dataset = green_spaces,
                                  distance_variable = distance_to_nearest_green_or_blue_space)
 ```
 
-## Differences by household type
+## Differences by household type **
 
 ```{r}
 get_demographic_difference_graph(dataset = green_spaces,
@@ -204,6 +229,8 @@ get_demographic_difference_graph(dataset = green_spaces,
                                  grouping_variable = urban_rural_classification,
                                  distance_variable = distance_to_nearest_green_or_blue_space)
 ```
+## Differences by local authority
+
 
 
 ```{r}
@@ -211,4 +238,315 @@ get_demographic_difference_graph(dataset = green_spaces,
                                  grouping_variable = ca_name,
                                  distance_variable = distance_to_nearest_green_or_blue_space)
 ```
+There's a lot of data here, so let's look closer at two councils that are very different from each other.
+
+- East Lothian
+    - Over 80% of people on average can access a green space within a 5 minute walk
+- West Dunbartonshire
+    - Just over 50% of people on average can access a green space within a 5 minute walk
+
+# Statistical tests for demographic differences
+## SIMD **
+
+The test was significant at the 99.99% level (p < 0.01). We can say that the mean percentage of people in the 80% least deprived SIMD quintiles who are able to access a green space within 5 minutes is significantly different from the mean percentage of people in the 20% most deprived SIMD quintile who are able to access a green space within 5 minutes. Specifically, significantly more people in the 80% least deprived SIMD quintiles are able to access a green space within 5 minutes of where they live.
+
+### Hypothesis
+H0 - There is no difference between the mean percentage of people able to access a green space within a 5 minutes walk by SIMD level (20% most deprived SIMD and 80% least deprived)
+H1 - There is a significant difference between the mean percentage of people able to access a green space within a 5 minute walk by SIMD level (20% most deprived SIMD and 80% least deprived)
+
+### Box plots
+```{r}
+#Look at the differences on the boxplot by SIMD
+green_spaces %>% 
+  filter(simd_quintiles != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest
+  ggplot(aes(x = simd_quintiles,
+             y = value))+
+  geom_boxplot()+
+  geom_jitter(alpha = 0.3)
+```
+### Two sample difference in means test
+```{r}
+#generate the null distribution
+null_distribution <- green_spaces %>% 
+  filter(simd_quintiles != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest 
+  specify(value ~ simd_quintiles) %>% 
+  hypothesise(null = "independence") %>% 
+  generate(reps = 5000, type = "permute") %>% 
+  calculate(stat = "diff in means", order = c("80% least deprived", "20% most deprived"))
+```
+```{r}
+#calculate the observed stat
+observed_stat <- green_spaces %>% 
+  filter(simd_quintiles != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest 
+  specify(value ~ simd_quintiles) %>%
+  calculate(stat = "diff in means", order = c("80% least deprived", "20% most deprived"))
+```
+
+```{r}
+#visualise the observed stat on the null distribution
+null_distribution %>% 
+  visualise()+
+  shade_p_value(obs_stat = observed_stat, direction = "both")#interested in any significant difference
+```
+
+```{r}
+#get p value
+null_distribution %>% 
+  get_p_value(obs_stat = observed_stat, direction = "both")
+```
+
+## Ethnicity **
+
+The test was significant at the 99.99% level (p < 0.01), meaning that we can reject the null hypothesis that there is no difference between the mean percentage of people who can access a green space within 5 minutes walk from their house by ethnicity. The test shows that significantly more white people can access a green space within 5 minutes walk from their residence. There is a clear racial disparity in access to green spaces.
+
+Note: there are very few observations of "Other" ethnicity (18). We're using bootstrapping, so this is probably okay for the statistical test but it's worth noting that the groups are very unequal and the "Other" ethnicity observations are only in Glasgow, Edinburgh and an amalgamated value for All Scotland.
+
+### Hypothesis
+
+H0 - There is no difference between the mean percentage of people able to access a green space within a 5 minutes walk by ethnicity 
+H1 - There is a significant difference between the mean percentage of people able to access a green space within a 5 minute walk by ethnicity
+
+
+### Box plots
+```{r}
+#Look at the differences on the boxplot by ethnicity
+green_spaces %>% 
+  filter(ethnicity != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest
+  ggplot(aes(x = ethnicity,
+             y = value))+
+  geom_boxplot()+
+  geom_jitter(alpha = 0.3)
+```
+### Two sample difference in means test
+```{r}
+#generate the null distribution
+null_distribution <- green_spaces %>% 
+  filter(ethnicity != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest 
+  specify(value ~ ethnicity) %>% 
+  hypothesise(null = "independence") %>% 
+  generate(reps = 5000, type = "permute") %>% 
+  calculate(stat = "diff in means", order = c("White", "Other"))
+```
+
+```{r}
+observed_stat <- green_spaces %>% 
+  filter(ethnicity != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest 
+  specify(value ~ ethnicity) %>% 
+  calculate(stat = "diff in means", order = c("White", "Other"))
+```
+
+```{r}
+null_distribution %>% 
+  visualise()+
+  shade_pvalue(obs_stat = observed_stat, direction = "both")
+```
+
+```{r}
+null_distribution %>% 
+  get_p_value(obs_stat = observed_stat, direction = "both")
+```
+
+## Age **
+
+Significant at the 99.99% confidence level (p < 0.01) for the difference between the age group over 65 and the 16-34 and 35-64 age groups. In this case, there is sufficient evidence to reject the null hypothesis that there is no difference between these groups in terms of the mean percentage of people who are able to access a green space within a 5 min walk. Specifically, the mean percentage of people over 65 who are able to access a green space within 5 min is significantly less than the other two groups.
+
+### Hypothesis
+H0 - There is no difference between the mean percentage of people able to access a green space within a 5 minutes walk by age group 
+H1 - There is a significant difference between the mean percentage of people able to access a green space within a 5 minute walk by age group
+
+
+### Libraries
+```{r}
+library(car)
+library(dlookr)
+library(ggstatsplot)
+```
+```{r}
+subset_age_5min_access <- green_spaces %>% 
+  filter(age != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") #specify 5 min walk as the value of interest
+```
+
+### Normality and homogeneity of variance tests
+```{r}
+#test for homogeneity of variance
+leveneTest(subset_age_5min_access$value, subset_age_5min_access$age, center = mean)
+```
+Levene's test is significant, so we can't assume homogeneity of variance. Side note that this could be because of the because of the fairly large amount of data that we have, which could mean that even small differences could become significant. Nevertheless, we should test for normality to see if we can use Welch's F instead, which doesn't assume homegeneity of variance (Field, 2012, p 441).
+
+
+We can use the dlookr package to test for normal distributions within specific groups (see https://yuzar-blog.netlify.app/posts/2022-04-03-anova/) 
+```{r}
+#This uses the shapiro-wilk test to test for normal distribution within groups
+subset_age_5min_access %>% 
+  group_by(age) %>% 
+  normality(value)
+```
+Some of the p-values are significant at the 95% confidence level, so we shouldn't use ANOVA here. However, we can use the Kruskal-Wallis test using the ggstatsplot package.
+
+### Kruskal-Wallis test
+```{r}
+ggbetweenstats(
+  data = subset_age_5min_access,
+  x = age,
+  y = value,
+  type = "nonparametric"
+)
+```
+We can see that the difference between the mean value of people 65+ who can access a green space within a 5 minute walk is significantly different from both the 16-34 y/o group and the 35-64 y/o group.
+
+
+## Household type **
+
+Significant at the 99.99% confidence level (p < 0.01) for the difference between pensioners and adult households/households with children. In this case, there is sufficient evidence to reject the null hypothesis that there is no difference between these groups in terms of the mean percentage of people who are able to access a green space within a 5 min walk. Specifically, the mean percentage of pensioners who are able to access a green space within 5 min is significantly less than the other two groups.
+
+### Hypothesis
+H0 - There is no difference between the mean percentage of people able to access a green space within a 5 minutes walk by household type 
+H1 - There is a significant difference between the mean percentage of people able to access a green space within a 5 minute walk by household type
+
+```{r}
+#create subset of data
+subset_hh_type_5min_access <- green_spaces %>% 
+  filter(household_type != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") #specify 5 min walk as the value of interest
+```
+
+### Normality and homogeneity of variance tests
+
+```{r}
+#test for homogeneity of variance in the values for different household types w/ Levene Test
+leveneTest(subset_hh_type_5min_access$value, 
+           subset_hh_type_5min_access$household_type,
+           center = mean)
+```
+
+```{r}
+#This uses the shapiro-wilk test to test for normal distribution within groups
+subset_hh_type_5min_access %>% 
+  group_by(household_type) %>% 
+  normality(value)
+```
+Homogeneity of variance can't be assumed, but the data is normally distributed, so we can use Welch's F in an ANOVA test (Field, 2012, p 441). 
+
+### ANOVA
+
+```{r}
+ggbetweenstats(
+  data = subset_hh_type_5min_access,
+  x = household_type,
+  y = value,
+  type = "parametric",
+  var.equal = FALSE
+)
+```
+
+This aligns with the age results where people over 65 had less access to green spaces and can be grouped together with this finding in the presentation.
+
+## Urban/rural classification **
+
+Significant at the 99.99% confidence level (p < 0.01). We can say that the mean percentage of people in rural areas who are able to access a green space within 5 minutes is significantly different from the mean percentage of people in urban areas who are able to access a green space within 5 minutes. Specifically, significantly more people living in rural areas are able to access a green space within 5 minutes of where they live. On average, 12.5% more people in rural areas (mean = 77.8%) are able to access a green space within 5 minutes of walking than people in urban areas (mean = 65.3%)
+
+### Hypothesis
+H0 - There is no difference between the mean percentage of people able to access a green space within a 5 minutes walk by urban/rural classification
+H1 - There is a significant difference between the mean percentage of people able to access a green space within a 5 minute walk by urban/rural classification
+
+### Box plots
+```{r}
+#Look at the differences on the boxplot by urban/rural classification
+green_spaces %>% 
+  filter(urban_rural_classification != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest
+  ggplot(aes(x = urban_rural_classification,
+             y = value))+
+  geom_boxplot()+
+  geom_jitter(alpha = 0.3)
+```
+
+From these box-plots, I think we can expect to see significant differences in the independent samples test. I also noticed that there are fewer observations for Rural than Urban, so I was interested in seeing which councils had no rural areas.
+
+### Councils with no rural areas
+```{r}
+#get list of councils with rural areas
+councils_with_rural_areas <- green_spaces %>% 
+  filter(urban_rural_classification == "Rural" & #remove amalgamated values
+           measurement == "Percent"# & #filter out confidence interval values
+           #distance_to_nearest_green_or_blue_space == "A 5 minute walk or less"
+         ) %>% 
+  distinct(ca_name) %>% 
+  arrange(ca_name) %>% 
+  pull()
+
+#filter to find councils with no rural areas
+green_spaces %>% 
+  select(ca_name) %>% 
+  filter(!ca_name %in% councils_with_rural_areas) %>% 
+  distinct(ca_name) %>% 
+  arrange(ca_name)
+```
+### Two sample difference in means test
+
+```{r}
+#generate the null distribution
+null_distribution <- green_spaces %>% 
+  filter(urban_rural_classification != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest 
+  specify(value ~ urban_rural_classification) %>% 
+  hypothesise(null = "independence") %>% 
+  generate(reps = 5000, type = "permute") %>% 
+  calculate(stat = "diff in means", order = c("Rural", "Urban"))
+```
+
+```{r}
+observed_stat <- green_spaces %>% 
+  filter(urban_rural_classification != "All" & #remove amalgamated values
+           measurement == "Percent" & #filter out confidence interval values
+           distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest 
+  specify(value ~ urban_rural_classification) %>% 
+  calculate(stat = "diff in means", order = c("Rural", "Urban"))
+```
+
+```{r}
+null_distribution %>% 
+  visualise()+
+  shade_pvalue(obs_stat = observed_stat, direction = "both")
+```
+
+
+```{r}
+null_distribution %>% 
+  get_p_value(obs_stat = observed_stat, direction = "both")
+```
+
+```{r}
+observed_stat
+```
+```{r}
+get_grouped_distance_means(dataset = green_spaces,
+                           grouping_variable = urban_rural_classification,
+                           distance_variable = distance_to_nearest_green_or_blue_space) %>% 
+  filter(urban_rural_classification != "All")
+```
+
+
+
+
+
+
+
 
