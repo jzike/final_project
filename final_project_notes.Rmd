@@ -97,7 +97,7 @@ green_spaces <- green_spaces %>%
 ```
 
 
-# Green spaces - exploratory visualisations
+# Question 1 - exploratory visualisations
 
 ## Make function to get demographic difference graphs
 ```{r}
@@ -231,6 +231,11 @@ get_demographic_difference_graph(dataset = green_spaces,
 ```
 ## Differences by local authority
 
+```{r}
+get_grouped_distance_means(dataset = green_spaces,
+                                 grouping_variable = ca_name,
+                                 distance_variable = distance_to_nearest_green_or_blue_space) 
+```
 
 
 ```{r}
@@ -238,14 +243,16 @@ get_demographic_difference_graph(dataset = green_spaces,
                                  grouping_variable = ca_name,
                                  distance_variable = distance_to_nearest_green_or_blue_space)
 ```
-There's a lot of data here, so let's look closer at two councils that are very different from each other.
+### Notes
+
+There's a lot of data here, so let's look closer at two councils that are different from each other and do a mini case study. I've chosen these two councils because they have the highest and lowest average percentages of people who can access a green space within 5 minutes of their residence and contain both urban and rural areas.
 
 - East Lothian
     - Over 80% of people on average can access a green space within a 5 minute walk
-- West Dunbartonshire
-    - Just over 50% of people on average can access a green space within a 5 minute walk
+- South Lanarkshire
+    - Just over 60% of people on average can access a green space within a 5 minute walk
 
-# Statistical tests for demographic differences
+# Question 1 Statistical tests for differences in access
 ## SIMD **
 
 The test was significant at the 99.99% level (p < 0.01). We can say that the mean percentage of people in the 80% least deprived SIMD quintiles who are able to access a green space within 5 minutes is significantly different from the mean percentage of people in the 20% most deprived SIMD quintile who are able to access a green space within 5 minutes. Specifically, significantly more people in the 80% least deprived SIMD quintiles are able to access a green space within 5 minutes of where they live.
@@ -543,10 +550,194 @@ get_grouped_distance_means(dataset = green_spaces,
   filter(urban_rural_classification != "All")
 ```
 
+# Question 1 - Geographical comparison mini case study
+
+I've chosen three councils for the case study. I've chosen East Lothian and South Lanarkshire because they have the highest and lowest average percentages of people who can access a green space within 5 minutes of their residence and contain both urban and rural areas, making them interesting cases for comparison. I've also added on West Dunbartonshire because it has the lowest percentage of people who can access a green space within 5 minutes of their residence.
+
+- East Lothian
+    - Over 80% of people on average can access a green space within a 5 minute walk
+- South Lanarkshire
+    - Just over 60% of people on average can access a green space within a 5 minute walk
+
+
+
+## Demographic comparison
+```{r}
+green_spaces %>% 
+  filter(ca_name %in% c("South Lanarkshire", "East Lothian") &
+           measurement == "Percent" &
+           urban_rural_classification != "All" &
+           distance_to_nearest_green_or_blue_space != "Don't Know") %>% 
+  group_by(ca_name, urban_rural_classification, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = urban_rural_classification,
+         y = mean_percentage,
+         fill = ca_name)) +
+  geom_col(position = "dodge")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~distance_to_nearest_green_or_blue_space)
+  
+```
+
+```{r}
+green_spaces %>% 
+  filter(ca_name %in% c("West Dunbartonshire", "East Lothian") &
+           distance_to_nearest_green_or_blue_space != "Don't Know" &
+           measurement == "Percent") %>% 
+  group_by(ca_name, date_code, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = factor(date_code),
+             y = mean_percentage,
+             colour = distance_to_nearest_green_or_blue_space)) +
+  geom_point()+
+  geom_line(aes(x = factor(date_code),
+                y = mean_percentage,
+                group = distance_to_nearest_green_or_blue_space))+
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~ca_name)
+```
 
 
 
 
 
 
+# Question 2 - Trends over time
+
+
+```{r}
+green_spaces %>% 
+  filter(ca_name == "All Scotland" &
+           distance_to_nearest_green_or_blue_space != "Don't Know" &
+           measurement == "Percent" ) %>% 
+  group_by(date_code, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = factor(date_code),
+             y = mean_percentage,
+             colour = distance_to_nearest_green_or_blue_space)) +
+  geom_point()+
+  geom_line(aes(x = factor(date_code),
+                y = mean_percentage,
+                group = distance_to_nearest_green_or_blue_space))+
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+
+## Urban rural access over time
+```{r}
+green_spaces %>% 
+  filter(ca_name == "All Scotland" &
+           distance_to_nearest_green_or_blue_space != "Don't Know" &
+           measurement == "Percent" &
+           urban_rural_classification != "All") %>% 
+  group_by(date_code, urban_rural_classification, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = factor(date_code),
+             y = mean_percentage,
+             colour = distance_to_nearest_green_or_blue_space)) +
+  geom_point()+
+  geom_line(aes(x = factor(date_code),
+                y = mean_percentage,
+                group = distance_to_nearest_green_or_blue_space))+
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~urban_rural_classification)
+```
+## SIMD access over time
+
+```{r}
+green_spaces %>% 
+  filter(ca_name == "All Scotland" &
+           distance_to_nearest_green_or_blue_space != "Don't Know" &
+           measurement == "Percent" &
+           simd_quintiles != "All") %>% 
+  group_by(date_code, simd_quintiles, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = factor(date_code),
+             y = mean_percentage,
+             colour = distance_to_nearest_green_or_blue_space)) +
+  geom_point()+
+  geom_line(aes(x = factor(date_code),
+                y = mean_percentage,
+                group = distance_to_nearest_green_or_blue_space))+
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~simd_quintiles)
+```
+## Ethnicity access over time
+
+```{r}
+green_spaces %>% 
+  filter(ca_name == "All Scotland" &
+           distance_to_nearest_green_or_blue_space != "Don't Know" &
+           measurement == "Percent" &
+           ethnicity != "All") %>% 
+  group_by(date_code, ethnicity, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = factor(date_code),
+             y = mean_percentage,
+             colour = distance_to_nearest_green_or_blue_space)) +
+  geom_point()+
+  geom_line(aes(x = factor(date_code),
+                y = mean_percentage,
+                group = distance_to_nearest_green_or_blue_space))+
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~ethnicity)
+```
+## Age access over time
+```{r}
+green_spaces %>% 
+  filter(ca_name == "All Scotland" &
+           distance_to_nearest_green_or_blue_space != "Don't Know" &
+           measurement == "Percent" &
+           age != "All") %>% 
+  group_by(date_code, age, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = factor(date_code),
+             y = mean_percentage,
+             colour = distance_to_nearest_green_or_blue_space)) +
+  geom_point()+
+  geom_line(aes(x = factor(date_code),
+                y = mean_percentage,
+                group = distance_to_nearest_green_or_blue_space))+
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~age)
+```
+## Household type access over time
+
+```{r}
+green_spaces %>% 
+  filter(ca_name == "All Scotland" &
+           distance_to_nearest_green_or_blue_space != "Don't Know" &
+           measurement == "Percent" &
+           household_type != "All") %>% 
+  group_by(date_code, household_type, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = factor(date_code),
+             y = mean_percentage,
+             colour = distance_to_nearest_green_or_blue_space)) +
+  geom_point()+
+  geom_line(aes(x = factor(date_code),
+                y = mean_percentage,
+                group = distance_to_nearest_green_or_blue_space))+
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~household_type)
+```
+## LA comparison over time
+
+```{r}
+green_spaces %>% 
+  filter(ca_name %in% c("West Dunbartonshire", "East Lothian") &
+           distance_to_nearest_green_or_blue_space != "Don't Know" &
+           measurement == "Percent") %>% 
+  group_by(ca_name, date_code, distance_to_nearest_green_or_blue_space) %>% 
+  summarise(mean_percentage = mean(value)) %>% 
+  ggplot(aes(x = factor(date_code),
+             y = mean_percentage,
+             colour = distance_to_nearest_green_or_blue_space)) +
+  geom_point()+
+  geom_line(aes(x = factor(date_code),
+                y = mean_percentage,
+                group = distance_to_nearest_green_or_blue_space))+
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~ca_name)
+```
 
