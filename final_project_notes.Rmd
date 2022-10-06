@@ -31,7 +31,9 @@ aggregate_dataset <- read_csv("data/shs_aggregate_responses.csv") %>% clean_name
 
 
 ## Notes about the datasets
-- There aren't any missing values
+
+- There aren't any NAs
+- There are, however, missing values. For example, for some councils there is no data for "other" ethnicity or for the 20% most deprived SIMD quintile. According to the data documentation: "some tables include missing values. This is where the base on which percentages would be calculated is less than 50 and this data is judged to be insufficiently robust for publication." This means that in some councils, the sample group for some groups was too small for percentages to be published.
 - Both the neighbourhood rating and the community belonging datasets have links to the green spaces dataset, implying that there is perhaps an expected link between the distance participants had to walk to access a green space and how they rated their neighbourhood or how strongly they felt they belonged to their local community.
 - There are local authority codes, we should join on the LA names
 
@@ -740,4 +742,405 @@ green_spaces %>%
    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
   facet_wrap(~ca_name)
 ```
+
+# Question 3 - Differences in neighbourhood ratings
+
+
+## Cleaning/wrangling
+```{r}
+#join green spaces
+neighbouhood_rating <- neighbouhood_rating %>% left_join(la_names, by = c("feature_code" = "ca")) %>% 
+  mutate(ca_name = if_else(is.na(ca_name), "All Scotland", ca_name)) 
+```
+
+```{r}
+neighbouhood_rating <- neighbouhood_rating %>% 
+  mutate(simd_quintiles = factor(simd_quintiles, levels = c("20% most deprived",
+                                                            "80% least deprived",
+                                                            "All")),
+         walking_distance_to_nearest_greenspace = factor(
+           walking_distance_to_nearest_greenspace, levels = c(
+             "Less than 10 minutes",
+             "More than 10 minutes",
+             "Don't Know",
+             "All")
+         ),
+         neighbourhood_rating = factor(neighbourhood_rating, levels = c(
+           "Very good",
+           "Fairly good",
+           "Fairly poor",
+           "Very poor",
+           "No opinion"
+         ))) 
+```
+
+## Transform dataset
+
+We want to compare the mean percentages of people who rated their neighbourhood as good or very good based on their access to green space. Therefore, we need to transform the dataset so that there are only two levels for neighbourhood rating and the mean percentages can be compared using a two sample difference in means test.
+
+Since the values are already percentages, you need to sum the values in the two "Good" levels and the values in the two "Poor" levels, so this is the approach that I'm taking here.
+
+```{r}
+#Transform to binary neighbourhood ratings to compare mean percentages
+comb_neighbourhood_rating <- neighbouhood_rating %>% 
+  select(-c(feature_code, units, gender, urban_rural_classification, simd_quintiles,
+            type_of_tenure, household_type, ethnicity)) %>% 
+  filter(!walking_distance_to_nearest_greenspace %in% c("Don't Know", "All") &
+           neighbourhood_rating != "No opinion" &
+           measurement == "Percent") %>% #remove confidence interval values to get mean of percentages only
+  group_by(ca_name, date_code, walking_distance_to_nearest_greenspace, neighbourhood_rating) %>% 
+  summarise(mean_percentage = mean(value)) %>% #get mean percentages for grouped data
+  mutate(neighbourhood_binary = if_else(
+    neighbourhood_rating %in% c("Fairly good", "Very good"), "Good", "Poor")) %>% #transform to 2 levels
+  select(-neighbourhood_rating) %>% #take out original neighbourhood ratings
+  group_by(ca_name, date_code, walking_distance_to_nearest_greenspace, neighbourhood_binary) %>% #regroup by binary neighbourhood rating
+  summarise(mean_percentage = sum(mean_percentage))#sum mean percentages for new good and poor levels
+```
+## Hypothesis test - "Good" neighbourhood rating and access to green space
+
+The test was significant at the 99.99% level (p < 0.01). This means that we can reject the null hypothesis that there is no significant difference in the mean percentages of people rating their neighbourhood as "Good" between the group of people who can access a green space within a 10 minute walk and the group of people who have to walk over 10 minutes to access a green space. Specifically, on average, more people who had to walk less than 10 min to access a green space rated their neighbourhoods as "good" (95.5%) than people who had to walk further to access a green space (92.85%). 
+
+```{r}
+comb_neighbourhood_rating %>% 
+  filter(neighbourhood_binary == "Good") %>% 
+  group_by(walking_distance_to_nearest_greenspace) %>% 
+  summarise(mean_percentage = mean(mean_percentage))
+```
+
+
+### Hypothesis
+
+H0 - There is no significant difference in the mean percentages of people assigning "good" ratings based on their access to a green space. 
+
+H1 - There is a significant difference in the mean percentages of people assigning "good" ratings based on their access to a green space. 
+
+### Box plots
+
+```{r}
+comb_neighbourhood_rating %>% 
+filter(neighbourhood_binary == "Good") %>% 
+  ggplot(aes(x = walking_distance_to_nearest_greenspace,
+             y = mean_percentage))+
+  geom_boxplot() +
+  geom_jitter()
+```
+
+
+
+
+
+### Two sample difference in means test - Good ratings
+
+
+```{r}
+#generate the null distribution
+null_distribution <- comb_neighbourhood_rating %>% 
+filter(neighbourhood_binary == "Good") %>% #specify "Good" ratings as the value of interest 
+  specify(mean_percentage ~ walking_distance_to_nearest_greenspace) %>% 
+  hypothesise(null = "independence") %>% 
+  generate(reps = 5000, type = "permute") %>% 
+  calculate(stat = "diff in means", order = c("Less than 10 minutes", 
+                                              "More than 10 minutes"))
+```
+
+```{r}
+observed_stat <- comb_neighbourhood_rating %>% 
+filter(neighbourhood_binary == "Good") %>% #specify "Good" ratings as the value of interest 
+  specify(mean_percentage ~ walking_distance_to_nearest_greenspace) %>% 
+  calculate(stat = "diff in means", order = c("Less than 10 minutes", 
+                                              "More than 10 minutes"))
+```
+
+```{r}
+null_distribution %>% 
+  visualise()+
+  shade_pvalue(obs_stat = observed_stat, direction = "both")
+```
+```{r}
+null_distribution %>% 
+  get_p_value(obs_stat = observed_stat, direction = "both")
+```
+
+
+## Hypothesis test - "Poor" neighbourhood rating and access to green space
+
+The test was significant at the 99.99% level (p < 0.01). This means that we can reject the null hypothesis that there is no significant difference in the mean percentages of people rating their neighbourhood as "Poor" between the group of people who can access a green space within a 10 minute walk and the group of people who have to walk over 10 minutes to access a green space. Specifically, on average, fewer people who had to walk less than 10 min to access a green space rated their neighbourhoods as "poor" (4.26%) than people who had to walk further to access a green space (7.27%). 
+
+```{r}
+comb_neighbourhood_rating %>% 
+  filter(neighbourhood_binary == "Poor") %>% 
+  group_by(walking_distance_to_nearest_greenspace) %>% 
+  summarise(mean_percentage = mean(mean_percentage))
+```
+
+### Hypothesis
+
+H0 - There is no significant difference in the mean percentages of people assigning "poor" ratings based on their access to a green space. 
+
+H1 - There is a significant difference in the mean percentages of people assigning "poor" ratings based on their access to a green space. 
+
+### Box plot
+
+
+```{r}
+comb_neighbourhood_rating %>% 
+filter(neighbourhood_binary == "Poor") %>% 
+  ggplot(aes(x = walking_distance_to_nearest_greenspace,
+             y = mean_percentage))+
+  geom_boxplot() +
+  geom_jitter()
+```
+
+
+
+### Two sample difference in means test - poor ratings
+
+
+```{r}
+#generate the null distribution
+null_distribution <- comb_neighbourhood_rating %>% 
+filter(neighbourhood_binary == "Poor") %>% #specify "Poor" ratings as the value of interest 
+  specify(mean_percentage ~ walking_distance_to_nearest_greenspace) %>% 
+  hypothesise(null = "independence") %>% 
+  generate(reps = 5000, type = "permute") %>% 
+  calculate(stat = "diff in means", order = c("Less than 10 minutes", 
+                                              "More than 10 minutes"))
+```
+
+```{r}
+observed_stat <- comb_neighbourhood_rating %>% 
+filter(neighbourhood_binary == "Poor") %>% #specify "Poor" ratings as the value of interest 
+  specify(mean_percentage ~ walking_distance_to_nearest_greenspace) %>% 
+  calculate(stat = "diff in means", order = c("Less than 10 minutes", 
+                                              "More than 10 minutes"))
+```
+
+```{r}
+null_distribution %>% 
+  visualise()+
+  shade_pvalue(obs_stat = observed_stat, direction = "both")
+```
+
+
+```{r}
+null_distribution %>% 
+  get_p_value(obs_stat = observed_stat, direction = "both")
+```
+
+
+
+### LA comparison - Good and poor access to green space 
+
+```{r}
+comb_neighbourhood_rating %>% 
+  filter(ca_name %in% c("West Dunbartonshire", "East Lothian")) %>% 
+  group_by(ca_name, neighbourhood_binary) %>% 
+  summarise(mean_percentage = mean(mean_percentage))
+```
+
+
+# Question 3 - Differences in community belonging
+
+
+
+## Cleaning/wrangling
+```{r}
+#join green spaces
+community_belonging <- community_belonging %>% left_join(la_names, by = c("feature_code" = "ca")) %>% 
+  mutate(ca_name = if_else(is.na(ca_name), "All Scotland", ca_name)) 
+```
+
+```{r}
+community_belonging <- community_belonging %>% 
+  mutate(simd_quintiles = factor(simd_quintiles, levels = c("20% most deprived",
+                                                            "80% least deprived",
+                                                            "All")),
+         walking_distance_to_nearest_greenspace = factor(
+           walking_distance_to_nearest_greenspace, levels = c(
+             "Less than 10 minutes",
+             "More than 10 minutes",
+             "Don't Know",
+             "All")
+         ),
+         community_belonging = factor(community_belonging, levels = c(
+           "Very strongly",
+           "Fairly strongly",
+           "Not very strongly",
+           "Not at all strongly",
+           "Don't know"
+         ))) 
+```
+
+
+
+## Transform dataset
+
+Just like the neighbourhood rating analysis, we want to compare the mean percentages of people who rated their feeling of belonging in their community as very strong/fairly strong vs not very strong/not at all strong based on their access to green space. Therefore, we need to transform the dataset so that there are only two levels for neighbourhood rating and the mean percentages can be compared using a two sample difference in means test.
+
+Since the values are already percentages, you need to sum the values in the two "Strong" levels and the values in the two "Not strong" levels, so this is the approach that I'm taking here.
+
+```{r}
+#Transform to binary belonging ratings to compare mean percentages
+comb_belonging <- community_belonging %>% 
+  select(-c(feature_code, units, gender, urban_rural_classification, simd_quintiles,
+            type_of_tenure, household_type, ethnicity)) %>% 
+  filter(!walking_distance_to_nearest_greenspace %in% c("Don't Know", "All") &
+           community_belonging != "Don't know" &
+           measurement == "Percent") %>% #remove confidence interval values to get mean of percentages only
+  group_by(ca_name, date_code, walking_distance_to_nearest_greenspace, community_belonging) %>% 
+  summarise(mean_percentage = mean(value)) %>% #get mean percentages for grouped data
+  mutate(belonging_binary = if_else(
+    community_belonging %in% c("Fairly strongly", "Very strongly"), "Strong", "Not strong")) %>% #transform to 2 levels
+  select(-community_belonging) %>% #take out original belonging ratings
+  group_by(ca_name, date_code, walking_distance_to_nearest_greenspace, belonging_binary) %>% #regroup by binary belonging rating
+  summarise(mean_percentage = sum(mean_percentage))#sum mean percentages for new belonging levels
+```
+
+## Hypothesis test - "Strong" belonging and access to green space
+
+The test was significant at the 99.99% level (p < 0.01). This means that we can reject the null hypothesis that there is no significant difference in the mean percentages of people who rated their feeling of belonging in their community as "strong" between the group of people who can access a green space within a 10 minute walk and the group of people who have to walk over 10 minutes to access a green space. Specifically, on average, more people who had to walk less than 10 min to access a green space rated their feeling of belonging as "strong" (80.14%) than people who had to walk further to access a green space (74.63%). 
+
+```{r}
+comb_belonging %>% 
+  filter(belonging_binary == "Strong") %>% 
+  group_by(walking_distance_to_nearest_greenspace) %>% 
+  summarise(mean_percentage = mean(mean_percentage))
+```
+
+
+### Hypothesis
+
+H0 - There is no significant difference in the mean percentages of people assigning "strong" feelings of belonging ratings based on their access to a green space. 
+
+H1 - There is a significant difference in the mean percentages of people assigning "strong" feelings of belonging ratings based on their access to a green space. 
+
+### Box plots
+
+```{r}
+comb_belonging %>% 
+filter(belonging_binary == "Strong") %>% 
+  ggplot(aes(x = walking_distance_to_nearest_greenspace,
+             y = mean_percentage))+
+  geom_boxplot() +
+  geom_jitter()
+```
+
+### Two sample difference in means test - Strong belonging ratings
+
+
+```{r}
+#generate the null distribution
+null_distribution <- comb_belonging %>% 
+filter(belonging_binary == "Strong") %>% #specify "Good" ratings as the value of interest 
+  specify(mean_percentage ~ walking_distance_to_nearest_greenspace) %>% 
+  hypothesise(null = "independence") %>% 
+  generate(reps = 5000, type = "permute") %>% 
+  calculate(stat = "diff in means", order = c("Less than 10 minutes", 
+                                              "More than 10 minutes"))
+```
+
+```{r}
+observed_stat <- comb_belonging %>% 
+filter(belonging_binary == "Strong") %>% #specify "Good" ratings as the value of interest 
+  specify(mean_percentage ~ walking_distance_to_nearest_greenspace) %>% 
+  calculate(stat = "diff in means", order = c("Less than 10 minutes", 
+                                              "More than 10 minutes"))
+```
+
+```{r}
+null_distribution %>% 
+  visualise()+
+  shade_pvalue(obs_stat = observed_stat, direction = "both")
+```
+```{r}
+null_distribution %>% 
+  get_p_value(obs_stat = observed_stat, direction = "both")
+```
+
+
+
+## Hypothesis test - "Not strong" belonging and access to green space
+
+The test was significant at the 99.99% level (p < 0.01). This means that we can reject the null hypothesis that there is no significant difference in the mean percentages of people who rated their feeling of belonging in their community as "not strong" between the group of people who can access a green space within a 10 minute walk and the group of people who have to walk over 10 minutes to access a green space. Specifically, on average, fewer people who had to walk less than 10 min to access a green space rated their feeling of belonging as "not strong" (19.19%) than people who had to walk further to access a green space (24.21%). 
+
+```{r}
+comb_belonging %>% 
+  filter(belonging_binary == "Not strong") %>% 
+  group_by(walking_distance_to_nearest_greenspace) %>% 
+  summarise(mean_percentage = mean(mean_percentage))
+```
+
+
+### Hypothesis
+
+H0 - There is no significant difference in the mean percentages of people assigning "not strong" feelings of belonging ratings based on their access to a green space. 
+
+H1 - There is a significant difference in the mean percentages of people assigning "not strong" feelings of belonging ratings based on their access to a green space. 
+
+### Box plots
+
+```{r}
+comb_belonging %>% 
+filter(belonging_binary == "Not strong") %>% 
+  ggplot(aes(x = walking_distance_to_nearest_greenspace,
+             y = mean_percentage))+
+  geom_boxplot() +
+  geom_jitter()
+```
+
+### Two sample difference in means test - Not strong belonging ratings
+
+
+```{r}
+#generate the null distribution
+null_distribution <- comb_belonging %>% 
+filter(belonging_binary == "Not strong") %>% #specify "Not strong" ratings as the value of interest 
+  specify(mean_percentage ~ walking_distance_to_nearest_greenspace) %>% 
+  hypothesise(null = "independence") %>% 
+  generate(reps = 5000, type = "permute") %>% 
+  calculate(stat = "diff in means", order = c("Less than 10 minutes", 
+                                              "More than 10 minutes"))
+```
+
+```{r}
+observed_stat <- comb_belonging %>% 
+filter(belonging_binary == "Not strong") %>% #specify "Not strong" ratings as the value of interest 
+  specify(mean_percentage ~ walking_distance_to_nearest_greenspace) %>% 
+  calculate(stat = "diff in means", order = c("Less than 10 minutes", 
+                                              "More than 10 minutes"))
+```
+
+```{r}
+null_distribution %>% 
+  visualise()+
+  shade_pvalue(obs_stat = observed_stat, direction = "both")
+```
+
+```{r}
+null_distribution %>% 
+  get_p_value(obs_stat = observed_stat, direction = "both")
+```
+
+### LA comparison - Good and poor access to green space 
+
+```{r}
+comb_belonging %>% 
+  filter(ca_name %in% c("West Dunbartonshire", "East Lothian")) %>% 
+  group_by(ca_name, belonging_binary) %>% 
+  summarise(mean_percentage = mean(mean_percentage))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
