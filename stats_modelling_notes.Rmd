@@ -6,23 +6,17 @@ output: html_notebook
 ```{r}
 library(tidyverse)
 library(janitor)
+library(missRanger)
+library(ranger)
+library(dlookr)
+
 ```
 #Data
 ```{r}
 aggregate_dataset <- read_csv("data/shs_aggregate_responses.csv") %>% clean_names()
 ```
 
-```{r}
-aggregate_dataset %>% head()
-```
 
-```{r}
-aggregate_dataset %>% skimr::skim()
-```
-
-```{r}
-aggregate_dataset %>% distinct(volunteering_last_twelve_months)
-```
 ## Notes about the dataset
 - There are some NAs in the data, namely in the following rows
     - Satisfaction with nearest greenspace (9988 missing)
@@ -34,11 +28,11 @@ aggregate_dataset %>% distinct(volunteering_last_twelve_months)
 Can we meaningfully impute these?
 
 - 
-
 ```{r}
-aggregate_dataset %>% 
-  filter(is.na(highest_education_level)) %>% 
-  count(economic_status)
+plot_na_pareto(aggregate_dataset)
+```
+```{r}
+plot_na_intersect(aggregate_dataset)
 ```
 
 
@@ -73,3 +67,147 @@ Neighbourhood rating - No opinion - 190
 Satisfaction with nearest greenspace - No opinion - 3418
 Nearest green space use - Don't know - 83
 Distance to nearest green space - Don't know - 386
+
+
+To Impute or not Impute: That’s the Question - Lodder, 2013
+"If more than
+25% of the data is missing and researchers apply modern
+treatments to impute the missing data, then they should
+always compare the results of their subsequent analyses
+with the results they would have obtained if they had
+used complete case analysis." (Lodder, 2013)
+
+
+So we can try using the MissRanger package to compute missing categorical variables using the random forest method (https://yuzar-blog.netlify.app/posts/2021-03-04-how-to-impute-missing-values-in-r/#multivariate-imputation-of-categorical-variables)
+
+We can then compare the results to the complete case analysis (only complete observations are included - meaning all NAs are dropped)
+
+## Test/train split
+
+```{r}
+n_data <- nrow(aggregate_dataset)
+test_index <- sample(1:n_data, size = n_data*0.2)
+agg_dataset_test <- slice(aggregate_dataset, test_index)
+agg_dataset_train <- slice(aggregate_dataset, -test_index)
+```
+
+### Imputation for train dataset
+```{r}
+train_dataset_imputed <- missRanger(
+  agg_dataset_train,
+  formula = . ~ .,
+  num.trees = 1000,
+  verbose = 2,
+  seed = 111,
+  returnOOB = TRUE
+  
+)
+```
+### Imputation for test dataset
+```{r}
+test_dataset_imputed <- missRanger(
+  agg_dataset_test,
+  formula = . ~ .,
+  num.trees = 1000,
+  verbose = 2,
+  seed = 111,
+  returnOOB = TRUE
+)
+```
+
+
+
+
+```{r}
+train_comm_belonging <- train_dataset_imputed %>% 
+  #take out don't know b/c we want to predict strong/weak belonging
+  filter(community_belonging != "Don't know") %>% 
+   #create binary version of community belonging
+  mutate(community_belonging_binary = if_else(community_belonging %in% c(
+    "Very strongly", "Fairly strongly"), "Strong", "Not strong"), .after = 
+      community_belonging) %>%
+  #factor all the categorical variables
+  mutate(neighbourhood_rating = factor(neighbourhood_rating, levels = 
+                                         c("Very good",
+                                           "Fairly good",
+                                           "Fairly poor",
+                                           "Very poor",
+                                           "No opinion")),
+         distance_to_nearest_green_space = factor(distance_to_nearest_green_space,
+                                                  levels = c(
+                                                    "A 5 minute walk or less",
+                                                    "Within a 6-10 minute walk",
+                                                    "Within an 11-20 minute walk",
+                                                    "Within a 21-30 minute walk",
+                                                    "More than a 30 minute walk away",
+                                                    "Don't know"
+                                                  )),
+         satisfaction_with_nearest_green_space = factor(
+           satisfaction_with_nearest_green_space,
+           levels = c("Very satisfied",
+                      "Fairly satisfied",
+                      "Neither satisfied nor dissatisfied",
+                      "Fairly dissatisfied",
+                      "Very dissatisfied",
+                      "No opinion"
+                      )),
+         age = factor(age, levels = c(
+           "16 - 34 Years",
+           "35 - 64 Years",
+           "65 + Years"
+         )),
+         gender = as.factor(gender),
+         economic_status = as.factor(economic_status),
+         highest_education_level = factor(highest_education_level, levels = 
+                                            c(
+                                              "Standard grade or equiv (SVQ level 1 or 2).",
+                                              "Higher, A level or equivalent (SVQ Level 3)",
+                                              "HNC/HND or equivalent (SVQ Level 4)",
+                                              "Degree, Professional qualification (Above SVQ Level 4)",
+                                              "Other qualification"
+                                            )),
+         nearest_green_space_use = as.factor(nearest_green_space_use),
+         volunteering_last_twelve_months = as.factor(volunteering_last_twelve_months),
+         community_belonging_binary = as.factor(community_belonging_binary)
+         ) %>% 
+  #take out original community belonging and the n_persons column (the number of people with the same observed characteristics isn't useful to the model)
+  select(-c(community_belonging, n_persons))
+```
+
+```{r}
+aggregate_dataset_imputed %>% distinct(nearest_green_space_use)
+```
+
+```{r}
+community_rf_classifier <- ranger(community_belonging_binary ~ .,
+                                  data = train_comm_belonging,
+                                  importance = "impurity",
+                                  num.trees = 1000)
+```
+
+```{r}
+community_rf_classifier
+```
+
+```{r}
+importance(community_rf_classifier)
+```
+
+```{r}
+community_rf_classifier$confusion.matrix
+```
+
+```{r}
+#testing to see whether a different value for mtry will be better than the default
+oob_values <- vector(length = 10)
+for(i in 1:10) {
+  temp.model <- ranger(community_belonging_binary ~ .,
+                       data = train_comm_belonging,
+                       importance = "impurity",
+                       num.trees = 1000,
+                       mtry = i)
+  oob_values[i] <- temp.model$prediction.error
+}
+oob_values
+```
+
