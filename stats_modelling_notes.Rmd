@@ -9,7 +9,10 @@ library(janitor)
 library(missRanger)
 library(ranger)
 library(dlookr)
-
+library(pROC)
+library(glmulti)
+library(modelr)
+library(randomForest)
 ```
 #Data
 ```{r}
@@ -36,31 +39,7 @@ plot_na_intersect(aggregate_dataset)
 ```
 
 
-```{r}
-aggregate_dataset_imputed <- aggregate_dataset %>% 
-  mutate(volunteering_last_twelve_months = 
-           if_else(is.na(volunteering_last_twelve_months), 
-                   "Don't know", volunteering_last_twelve_months),
-         nearest_green_space_use = 
-           if_else(is.na(nearest_green_space_use), 
-                   "Don't know", nearest_green_space_use),
-         highest_education_level = 
-           if_else(is.na(highest_education_level), "Don't know",
-                   highest_education_level),
-         satisfaction_with_nearest_green_space = 
-           if_else(is.na(satisfaction_with_nearest_green_space), "No opinion",
-                   satisfaction_with_nearest_green_space)
-         ) %>% 
-  drop_na()
-```
 
-```{r}
-aggregate_dataset_imputed %>% 
-  filter(community_belonging != "Don't know") %>% 
-  mutate(community_belonging_binary = if_else(community_belonging %in% c(
-    "Very strongly", "Fairly strongly"), "Strong", "Not strong"), .after = 
-      community_belonging) 
-```
 
 Community belonging - Don't know - 576
 Neighbourhood rating - No opinion - 190
@@ -96,7 +75,7 @@ agg_dataset_train <- slice(aggregate_dataset, -test_index)
 train_dataset_imputed <- missRanger(
   agg_dataset_train,
   formula = . ~ .,
-  num.trees = 1000,
+  num.trees = 100,
   verbose = 2,
   seed = 111,
   returnOOB = TRUE
@@ -108,14 +87,14 @@ train_dataset_imputed <- missRanger(
 test_dataset_imputed <- missRanger(
   agg_dataset_test,
   formula = . ~ .,
-  num.trees = 1000,
+  num.trees = 100,
   verbose = 2,
   seed = 111,
   returnOOB = TRUE
 )
 ```
 
-
+# Community belonging
 
 
 ```{r}
@@ -174,15 +153,12 @@ train_comm_belonging <- train_dataset_imputed %>%
   select(-c(community_belonging, n_persons))
 ```
 
-```{r}
-aggregate_dataset_imputed %>% distinct(nearest_green_space_use)
-```
 
 ```{r}
 community_rf_classifier <- ranger(community_belonging_binary ~ .,
                                   data = train_comm_belonging,
                                   importance = "impurity",
-                                  num.trees = 1000)
+                                  num.trees = 500)
 ```
 
 ```{r}
@@ -204,10 +180,510 @@ for(i in 1:10) {
   temp.model <- ranger(community_belonging_binary ~ .,
                        data = train_comm_belonging,
                        importance = "impurity",
-                       num.trees = 1000,
+                       num.trees = 500,
                        mtry = i)
   oob_values[i] <- temp.model$prediction.error
 }
 oob_values
+```
+
+```{r}
+community_rf_classifier <- ranger(community_belonging_binary ~ .,
+                                  data = train_comm_belonging,
+                                  importance = "permutation",
+                                  num.trees = 50,
+                                  mtry = 2)
+```
+
+```{r}
+importance(community_rf_classifier)
+```
+
+
+```{r}
+head(importance_pvalues(community_rf_classifier, formula = community_belonging_binary ~ .,
+                        data = train_comm_belonging, method = "altmann"))
+```
+
+
+
+
+# Neighbourhood rating
+
+## Prepare training dataset
+```{r}
+train_neighbourhood_rating <- train_dataset_imputed %>% 
+  #take out don't know b/c we want to predict good/poor ratings
+  filter(neighbourhood_rating != "No opinion") %>% 
+   #create binary version of neighbourhood rating
+  mutate(neighbourhood_rating_binary = if_else(neighbourhood_rating %in% c(
+    "Very good", "Fairly good"), "Good", "Poor"), .after = 
+      neighbourhood_rating) %>%
+  #factor all the categorical variables
+  mutate(community_belonging = factor(community_belonging, levels = 
+                                         c("Very strongly",
+                                           "Fairly strongly",
+                                           "Not very strongly",
+                                           "Not at all strongly",
+                                           "Don't know")),
+         distance_to_nearest_green_space = factor(distance_to_nearest_green_space,
+                                                  levels = c(
+                                                    "A 5 minute walk or less",
+                                                    "Within a 6-10 minute walk",
+                                                    "Within an 11-20 minute walk",
+                                                    "Within a 21-30 minute walk",
+                                                    "More than a 30 minute walk away",
+                                                    "Don't know"
+                                                  )),
+         satisfaction_with_nearest_green_space = factor(
+           satisfaction_with_nearest_green_space,
+           levels = c("Very satisfied",
+                      "Fairly satisfied",
+                      "Neither satisfied nor dissatisfied",
+                      "Fairly dissatisfied",
+                      "Very dissatisfied",
+                      "No opinion"
+                      )),
+         age = factor(age, levels = c(
+           "16 - 34 Years",
+           "35 - 64 Years",
+           "65 + Years"
+         )),
+         gender = as.factor(gender),
+         economic_status = as.factor(economic_status),
+         highest_education_level = factor(highest_education_level, levels = 
+                                            c(
+                                              "Standard grade or equiv (SVQ level 1 or 2).",
+                                              "Higher, A level or equivalent (SVQ Level 3)",
+                                              "HNC/HND or equivalent (SVQ Level 4)",
+                                              "Degree, Professional qualification (Above SVQ Level 4)",
+                                              "Other qualification"
+                                            )),
+         nearest_green_space_use = as.factor(nearest_green_space_use),
+         volunteering_last_twelve_months = as.factor(volunteering_last_twelve_months),
+         neighbourhood_rating_binary = as.factor(neighbourhood_rating_binary)
+         ) %>% 
+  #take out original neighbourhood rating and the n_persons column (the number of people with the same observed characteristics isn't useful to the model)
+  select(-c(neighbourhood_rating, n_persons))
+```
+
+## Random forest model
+
+
+
+```{r}
+#testing to see which value for mtry will produce the lowest error
+oob_values <- vector(length = 7)
+for(i in 1:7) {
+  temp.model <- ranger(neighbourhood_rating_binary ~ .,
+                       data = train_neighbourhood_rating,
+                       importance = "impurity",
+                       num.trees = 500,
+                       mtry = i)
+  oob_values[i] <- temp.model$prediction.error
+}
+oob_values
+```
+Based on this output, a value of mtry = 2 is the best for this data.
+
+```{r}
+#grow the random forest
+neighbourhood_rf_classifier <- ranger(neighbourhood_rating_binary ~ .,
+                                  data = train_neighbourhood_rating,
+                                  importance = "impurity",
+                                  num.trees = 1000,
+                                  mtry = 2)
+```
+
+```{r}
+#get importance values
+importance(neighbourhood_rf_classifier)
+```
+
+```{r}
+#get p values for importance
+neighbourhood_rf_100 <- ranger(neighbourhood_rating_binary ~ .,
+                                  data = train_neighbourhood_rating,
+                                  importance = "permutation",
+                                  num.trees = 100,
+                                  mtry = 2)
+
+importance_pvalues(neighbourhood_rf_100, 
+                   formula = neighbourhood_rating_binary ~ ., 
+                   method = "altmann",
+                   data = train_neighbourhood_rating,
+                   num.permutations = 50)
+```
+It looks like the most important variables were year, community belonging, and satisfaction with nearest greenspace - all the rest were nonsignificant
+
+```{r}
+neighbourhood_rf_classifier$confusion.matrix
+```
+```{r}
+#true positive rate
+43588/(43588 + 73)
+#true negative rate
+167/(167 + 2845)
+#false positive rate
+2845/(167 + 2845)
+#false negative rate
+73/(73 + 43588)
+```
+```{r}
+rf_nrating_classifier <- randomForest(formula = neighbourhood_rating_binary ~ .,
+                                      data = train_neighbourhood_rating,
+                                      ntree = 1000,
+                                      norm.votes = FALSE)
+```
+
+```{r}
+rf_nrating_classifier
+randomForest::varImpPlot(rf_nrating_classifier)
+```
+
+
+### Test on the test dataset
+```{r}
+#Impute the test dataset using the same imputation method as before
+test_neighbourhood_rating <- test_dataset_imputed %>% 
+  #take out don't know b/c we want to predict good/poor ratings
+  filter(neighbourhood_rating != "No opinion") %>% 
+   #create binary version of neighbourhood rating
+  mutate(neighbourhood_rating_binary = if_else(neighbourhood_rating %in% c(
+    "Very good", "Fairly good"), "Good", "Poor"), .after = 
+      neighbourhood_rating) %>%
+  #factor all the categorical variables
+  mutate(community_belonging = factor(community_belonging, levels = 
+                                         c("Very strongly",
+                                           "Fairly strongly",
+                                           "Not very strongly",
+                                           "Not at all strongly",
+                                           "Don't know")),
+         distance_to_nearest_green_space = factor(distance_to_nearest_green_space,
+                                                  levels = c(
+                                                    "A 5 minute walk or less",
+                                                    "Within a 6-10 minute walk",
+                                                    "Within an 11-20 minute walk",
+                                                    "Within a 21-30 minute walk",
+                                                    "More than a 30 minute walk away",
+                                                    "Don't know"
+                                                  )),
+         satisfaction_with_nearest_green_space = factor(
+           satisfaction_with_nearest_green_space,
+           levels = c("Very satisfied",
+                      "Fairly satisfied",
+                      "Neither satisfied nor dissatisfied",
+                      "Fairly dissatisfied",
+                      "Very dissatisfied",
+                      "No opinion"
+                      )),
+         age = factor(age, levels = c(
+           "16 - 34 Years",
+           "35 - 64 Years",
+           "65 + Years"
+         )),
+         gender = as.factor(gender),
+         economic_status = as.factor(economic_status),
+         highest_education_level = factor(highest_education_level, levels = 
+                                            c(
+                                              "Standard grade or equiv (SVQ level 1 or 2).",
+                                              "Higher, A level or equivalent (SVQ Level 3)",
+                                              "HNC/HND or equivalent (SVQ Level 4)",
+                                              "Degree, Professional qualification (Above SVQ Level 4)",
+                                              "Other qualification"
+                                            )),
+         nearest_green_space_use = as.factor(nearest_green_space_use),
+         volunteering_last_twelve_months = as.factor(volunteering_last_twelve_months),
+         neighbourhood_rating_binary = as.factor(neighbourhood_rating_binary)
+         ) %>% 
+  #take out original neighbourhood rating and the n_persons column (the number of people with the same observed characteristics isn't useful to the model)
+  select(-c(neighbourhood_rating, n_persons))
+```
+
+
+
+```{r}
+#create predictions object
+predictions <- as.data.frame(predict(object = rf_nrating_classifier, test_neighbourhood_rating, type = "prob"))
+
+#add probabilities to test dataset
+test_neighbourhood_rating$pred <- predictions$Good
+
+#Create roc object for random forest predictions on test dataset
+roc_obj_nrating_tree <- test_neighbourhood_rating %>% 
+  roc(response = neighbourhood_rating_binary, predictor = pred)#predictor is the probability column
+
+#Plot roc object for random forest on test dataset
+ggroc(data = roc_obj_nrating_tree, legacy.axes = TRUE)+
+  labs(x = "False Positive Rate", y = "True positive rate")
+
+#Get AUC for random forest performance on test dataset
+auc(roc_obj_nrating_tree)
+```
+
+
+```{r}
+#check the confusion table
+test_nrating_pred %>% 
+  tabyl(neighbourhood_rating_binary, pred) %>% 
+  adorn_title()
+```
+```{r}
+#true positive rate
+10846/(10846 + 23)
+#true negative rate
+37/(37 + 761)
+#false positive rate
+761/(37 + 761)
+#false negative rate
+23/(23 + 10846)
+```
+
+
+## Logistic regression
+
+```{r}
+train_nrating_regression <- train_dataset_imputed %>% 
+  #take out don't know b/c we want to predict good/poor ratings
+  filter(neighbourhood_rating != "No opinion") %>% 
+   #create binary version of neighbourhood rating
+  mutate(neighbourhood_rating_binary = if_else(neighbourhood_rating %in% c(
+    "Very good", "Fairly good"), "Good", "Poor"), .after = 
+      neighbourhood_rating) %>%
+  #factor all the categorical variables
+  mutate(community_belonging = factor(community_belonging, levels = 
+                                         c("Very strongly",
+                                           "Fairly strongly",
+                                           "Not very strongly",
+                                           "Not at all strongly",
+                                           "Don't know")),
+         satisfaction_with_nearest_green_space = factor(
+           satisfaction_with_nearest_green_space,
+           levels = c("Very satisfied",
+                      "Fairly satisfied",
+                      "Neither satisfied nor dissatisfied",
+                      "Fairly dissatisfied",
+                      "Very dissatisfied",
+                      "No opinion"
+                      )),
+         age = factor(age, levels = c(
+           "16 - 34 Years",
+           "35 - 64 Years",
+           "65 + Years"
+         )),
+         gender = as.factor(gender),
+         economic_status = as.factor(economic_status),
+         highest_education_level = factor(highest_education_level, levels = 
+                                            c(
+                                              "Standard grade or equiv (SVQ level 1 or 2).",
+                                              "Higher, A level or equivalent (SVQ Level 3)",
+                                              "HNC/HND or equivalent (SVQ Level 4)",
+                                              "Degree, Professional qualification (Above SVQ Level 4)",
+                                              "Other qualification"
+                                            )),
+         nearest_green_space_use = as.factor(nearest_green_space_use),
+         volunteering_last_twelve_months = as.factor(volunteering_last_twelve_months),
+         neighbourhood_rating_binary = as.factor(neighbourhood_rating_binary)
+         ) %>% 
+  #change distance to nearest green space categories to match previous datasets
+  mutate(distance_to_nearest_green_space = case_when(
+    distance_to_nearest_green_space %in% c("A 5 minute walk or less",
+                                           "Within a 6-10 minute walk") ~ "Within 10 minutes",
+    distance_to_nearest_green_space %in% c("Within an 11-20 minute walk",
+                                           "Within a 21-30 minute walk",
+                                           "More than a 30 minute walk away") ~ "Over 10 minutes",
+    TRUE ~ "Don't know"
+  )) %>% 
+  mutate(distance_to_nearest_green_space = factor(distance_to_nearest_green_space, levels = c(
+    "Within 10 minutes",
+    "Over 10 minutes",
+    "Don't know"
+  ))) %>% 
+  #transform neighbourhood rating binary into logical variable
+  mutate(neighbourhood_rating_good = neighbourhood_rating_binary == "Good") %>% 
+  #take out original neighbourhood rating and the n_persons column (the number of people with the same observed characteristics isn't useful to the model)
+  select(-c(neighbourhood_rating, n_persons, neighbourhood_rating_binary)) 
+```
+
+```{r}
+alias(neighbourhood_rating_good ~ ., data = train_nrating_regression)
+```
+
+
+```{r}
+glmulti_search_all_mains <- glmulti(
+  neighbourhood_rating_good ~ .,
+  data = train_nrating_regression,
+  level = 1,
+  method = "h",
+  crit = "bic",
+  confsetsize = 10,
+  plotty = F,
+  report = T,
+  fitfunction = "glm",
+  family = binomial(link = "logit")
+)
+
+summary(glmulti_search_all_mains)
+```
+
+```{r}
+top <- weightable(glmulti_search_all_mains)
+```
+
+
+```{r}
+#assign best model to an object and get summary
+mod_nrating <- 
+  glm(neighbourhood_rating_good ~ community_belonging + 
+        satisfaction_with_nearest_green_space + economic_status + 
+        highest_education_level + year + household_size,
+      data = train_nrating_regression,
+      family = binomial(link = "logit"))
+
+summary(mod_nrating)
+```
+```{r}
+#odds_ratio = exp(coefficient for categorical predictor)
+#community belonging - not at all strongly
+exp(3.100740)
+```
+The coefficient for community_belonging ratings of "not at all strongly" was -3.1. This corresponds to an odds ratio of -22.21. Therefore, the odds of selecting a "good" neighbourhood rating are 22.2% lower if the participant indicated that they belonged "not at all strongly" to their community when compared with participants who indicated they belonged "very strongly" to their community.
+
+
+
+
+```{r}
+exp(2.006943)
+```
+The coefficient for satisfaction with green space ratings of "very dissatisfied" was -2.0. This corresponds to an odds ratio of 7.44. Therefore, the odds of selecting a "good" neighbourhood rating are 7.4% lower if the participant indicated that they were very dissatisfied with their nearest green space when compared with participants who indicated they were very satisfied with their nearest green space.
+
+### Confusion matrix
+```{r}
+nrating_regression_preds <- train_nrating_regression %>% 
+  # add our predicted probabilities from the log model
+  add_predictions(mod_nrating, type = "response") %>% 
+    mutate(predicted_good = pred >= 0.6)
+
+conf_mat <- nrating_regression_preds %>% 
+  tabyl(neighbourhood_rating_good, predicted_good) %>% 
+  adorn_title()
+```
+```{r}
+roc_obj_nrating <- nrating_regression_preds %>% 
+  roc(response = neighbourhood_rating_good, predictor = pred)#predictor is the probability column
+
+ggroc(data = roc_obj_nrating, legacy.axes = TRUE)+
+  labs(x = "False Positive Rate", y = "True positive rate")
+```
+### Test on the test dataset
+
+```{r}
+#format the test dataset
+
+test_nrating_regression <- test_dataset_imputed %>% 
+  #take out don't know b/c we want to predict good/poor ratings
+  filter(neighbourhood_rating != "No opinion") %>% 
+   #create binary version of neighbourhood rating
+  mutate(neighbourhood_rating_binary = if_else(neighbourhood_rating %in% c(
+    "Very good", "Fairly good"), "Good", "Poor"), .after = 
+      neighbourhood_rating) %>%
+  #factor all the categorical variables
+  mutate(community_belonging = factor(community_belonging, levels = 
+                                         c("Very strongly",
+                                           "Fairly strongly",
+                                           "Not very strongly",
+                                           "Not at all strongly",
+                                           "Don't know")),
+         satisfaction_with_nearest_green_space = factor(
+           satisfaction_with_nearest_green_space,
+           levels = c("Very satisfied",
+                      "Fairly satisfied",
+                      "Neither satisfied nor dissatisfied",
+                      "Fairly dissatisfied",
+                      "Very dissatisfied",
+                      "No opinion"
+                      )),
+         age = factor(age, levels = c(
+           "16 - 34 Years",
+           "35 - 64 Years",
+           "65 + Years"
+         )),
+         gender = as.factor(gender),
+         economic_status = as.factor(economic_status),
+         highest_education_level = factor(highest_education_level, levels = 
+                                            c(
+                                              "Standard grade or equiv (SVQ level 1 or 2).",
+                                              "Higher, A level or equivalent (SVQ Level 3)",
+                                              "HNC/HND or equivalent (SVQ Level 4)",
+                                              "Degree, Professional qualification (Above SVQ Level 4)",
+                                              "Other qualification"
+                                            )),
+         nearest_green_space_use = as.factor(nearest_green_space_use),
+         volunteering_last_twelve_months = as.factor(volunteering_last_twelve_months),
+         neighbourhood_rating_binary = as.factor(neighbourhood_rating_binary)
+         ) %>% 
+  #change distance to nearest green space categories to match previous datasets
+  mutate(distance_to_nearest_green_space = case_when(
+    distance_to_nearest_green_space %in% c("A 5 minute walk or less",
+                                           "Within a 6-10 minute walk") ~ "Within 10 minutes",
+    distance_to_nearest_green_space %in% c("Within an 11-20 minute walk",
+                                           "Within a 21-30 minute walk",
+                                           "More than a 30 minute walk away") ~ "Over 10 minutes",
+    TRUE ~ "Don't know"
+  )) %>% 
+  mutate(distance_to_nearest_green_space = factor(distance_to_nearest_green_space, levels = c(
+    "Within 10 minutes",
+    "Over 10 minutes",
+    "Don't know"
+  ))) %>% 
+  #transform neighbourhood rating binary into logical variable
+  mutate(neighbourhood_rating_good = neighbourhood_rating_binary == "Good") %>% 
+  #take out original neighbourhood rating and the n_persons column (the number of people with the same observed characteristics isn't useful to the model)
+  select(-c(neighbourhood_rating, n_persons, neighbourhood_rating_binary)) 
+```
+
+
+```{r}
+test_nrating_regression_preds <- test_nrating_regression %>% 
+   add_predictions(mod_nrating, type = "response") %>% 
+   mutate(predicted_good = pred >= 0.6)
+
+roc_obj_nrating_regression_test <- test_nrating_regression_preds %>% 
+  roc(response = neighbourhood_rating_good, predictor = pred)#predictor is the probability column
+
+ggroc(data = roc_obj_nrating_regression_test, legacy.axes = TRUE)+
+  labs(x = "False Positive Rate", y = "True positive rate")
+
+auc(roc_obj_nrating_regression_test)
+```
+
+
+mortgage_data_with_1pred <- mortgage_data %>% 
+  add_predictions(mortgage_1pred_model, type = "response") %>% 
+  mutate(predicted_accepted = pred >= 0.6)
+
+roc_obj_1_term <- mortgage_data_with_1pred %>% 
+  roc(response = accepted, predictor = pred)#predictor is the probability column
+
+ggroc(data = list(one_term = roc_obj_1_term, two_term = roc_obj_3_terms), legacy.axes = TRUE)+
+  labs(x = "False Positive Rate", y = "True positive rate")
+
+```{r}
+auc(roc_obj_nrating)
+```
+
+## Compare Logistic regression with Random forest
+
+```{r}
+#plot roc curves for both models on same graph
+ggroc(list(random_forest = roc_obj_nrating_tree, log_regression = roc_obj_nrating_regression_test))+
+  labs(x = "False Positive Rate", y = "True positive rate")
+
+#Get AUC for regression on test dataset
+auc(roc_obj_nrating_regression_test)
+
+#Get AUC for random forest performance on test dataset
+auc(roc_obj_nrating_tree)
 ```
 
