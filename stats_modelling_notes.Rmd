@@ -297,7 +297,7 @@ neighbourhood_rf_classifier <- ranger(neighbourhood_rating_binary ~ .,
 
 ```{r}
 #get importance values
-importance(neighbourhood_rf_classifier)
+ranger::importance(neighbourhood_rf_classifier)
 ```
 
 ```{r}
@@ -330,6 +330,7 @@ neighbourhood_rf_classifier$confusion.matrix
 73/(73 + 43588)
 ```
 ```{r}
+#get random forest model from random forest package using same formula, this will allow us to get probability predictions
 rf_nrating_classifier <- randomForest(formula = neighbourhood_rating_binary ~ .,
                                       data = train_neighbourhood_rating,
                                       ntree = 1000,
@@ -340,11 +341,11 @@ rf_nrating_classifier <- randomForest(formula = neighbourhood_rating_binary ~ .,
 rf_nrating_classifier
 randomForest::varImpPlot(rf_nrating_classifier)
 ```
-
+We're getting slightly different variables that are most important in the model generated with random forest package
 
 ### Test on the test dataset
 ```{r}
-#Impute the test dataset using the same imputation method as before
+#Modify the test dataset using the same method as before
 test_neighbourhood_rating <- test_dataset_imputed %>% 
   #take out don't know b/c we want to predict good/poor ratings
   filter(neighbourhood_rating != "No opinion") %>% 
@@ -400,7 +401,7 @@ test_neighbourhood_rating <- test_dataset_imputed %>%
   select(-c(neighbourhood_rating, n_persons))
 ```
 
-
+After trying to get the predictions to work on the model generated using the ranger package, I eventually had to use the random forests package in order to get probabilities as I couldn't figure out how to get them to work with the ranger model.
 
 ```{r}
 #create predictions object
@@ -443,6 +444,7 @@ test_nrating_pred %>%
 ## Logistic regression
 
 ```{r}
+#modify dataset so it is appropriate for logistic regression
 train_nrating_regression <- train_dataset_imputed %>% 
   #take out don't know b/c we want to predict good/poor ratings
   filter(neighbourhood_rating != "No opinion") %>% 
@@ -506,11 +508,13 @@ train_nrating_regression <- train_dataset_imputed %>%
 ```
 
 ```{r}
+#check for aliased variables in the dataset
 alias(neighbourhood_rating_good ~ ., data = train_nrating_regression)
 ```
 
 
 ```{r}
+#use glmulti to search for the best model
 glmulti_search_all_mains <- glmulti(
   neighbourhood_rating_good ~ .,
   data = train_nrating_regression,
@@ -534,22 +538,74 @@ top <- weightable(glmulti_search_all_mains)
 
 ```{r}
 #assign best model to an object and get summary
-mod_nrating <- 
+mod_nrating_econ <- 
   glm(neighbourhood_rating_good ~ community_belonging + 
         satisfaction_with_nearest_green_space + economic_status + 
         highest_education_level + year + household_size,
       data = train_nrating_regression,
       family = binomial(link = "logit"))
 
-summary(mod_nrating)
+
+
+mod_nrating_no_econ <- 
+  glm(neighbourhood_rating_good ~ community_belonging + 
+        satisfaction_with_nearest_green_space + 
+        highest_education_level + year + household_size,
+      data = train_nrating_regression,
+      family = binomial(link = "logit"))
+
+anova(mod_nrating_econ, mod_nrating_no_econ)
+
+summary(mod_nrating_no_econ)
 ```
+```{r}
+#get odds ratio for community belonging = not at all strongly
+exp(-3.16)
+#Take this result and get a percentage
+1-0.04242574
+```
+```{r}
+stats::confint(mod_nrating_no_econ, 'household_size', level = 0.95)
+```
+
+
+### Get odds ratio for model coefficients
+
+```{r}
+#has function odds.ratio
+library(questionr)
+options(scipen = 1000)
+odds.ratio(mod_nrating_no_econ, level = 0.95)
+```
+
+
+
+
+
+```{r}
+#pull log likelihoods for null and proposed models
+ll.null <- mod_nrating_no_econ$null.deviance/-2
+ll.proposed <- mod_nrating_no_econ$deviance/-2
+#get pseudo R^2 using this equation - this is the overall effect size
+(ll.null - ll.proposed)/ll.null
+```
+```{r}
+#get p value for R^2
+1 - pchisq(2*(ll.proposed - ll.null), df=(length(mod_nrating_no_econ$coefficients)-1))
+```
+
+
 ```{r}
 #odds_ratio = exp(coefficient for categorical predictor)
 #community belonging - not at all strongly
 exp(3.100740)
+
 ```
 The coefficient for community_belonging ratings of "not at all strongly" was -3.1. This corresponds to an odds ratio of -22.21. Therefore, the odds of selecting a "good" neighbourhood rating are 22.2% lower if the participant indicated that they belonged "not at all strongly" to their community when compared with participants who indicated they belonged "very strongly" to their community.
 
+```{r}
+train_nrating_regression %>% distinct(highest_education_level)
+```
 
 
 
@@ -558,11 +614,19 @@ exp(2.006943)
 ```
 The coefficient for satisfaction with green space ratings of "very dissatisfied" was -2.0. This corresponds to an odds ratio of 7.44. Therefore, the odds of selecting a "good" neighbourhood rating are 7.4% lower if the participant indicated that they were very dissatisfied with their nearest green space when compared with participants who indicated they were very satisfied with their nearest green space.
 
+```{r}
+exp(0.662114)
+```
+```{r}
+exp(0.064584)
+```
+
+
 ### Confusion matrix
 ```{r}
 nrating_regression_preds <- train_nrating_regression %>% 
   # add our predicted probabilities from the log model
-  add_predictions(mod_nrating, type = "response") %>% 
+  add_predictions(mod_nrating_no_econ, type = "response") %>% 
     mutate(predicted_good = pred >= 0.6)
 
 conf_mat <- nrating_regression_preds %>% 
@@ -575,11 +639,14 @@ roc_obj_nrating <- nrating_regression_preds %>%
 
 ggroc(data = roc_obj_nrating, legacy.axes = TRUE)+
   labs(x = "False Positive Rate", y = "True positive rate")
+
+#get auc for training model
+auc(roc_obj_nrating)
 ```
 ### Test on the test dataset
 
 ```{r}
-#format the test dataset
+#format the test dataset using the same method as the train dataset
 
 test_nrating_regression <- test_dataset_imputed %>% 
   #take out don't know b/c we want to predict good/poor ratings
@@ -645,45 +712,46 @@ test_nrating_regression <- test_dataset_imputed %>%
 
 
 ```{r}
+#add predictions to the test dataset using the model
 test_nrating_regression_preds <- test_nrating_regression %>% 
-   add_predictions(mod_nrating, type = "response") %>% 
+   add_predictions(mod_nrating_no_econ, type = "response") %>% 
    mutate(predicted_good = pred >= 0.6)
 
+#create roc object
 roc_obj_nrating_regression_test <- test_nrating_regression_preds %>% 
   roc(response = neighbourhood_rating_good, predictor = pred)#predictor is the probability column
 
+#plot the roc object
 ggroc(data = roc_obj_nrating_regression_test, legacy.axes = TRUE)+
   labs(x = "False Positive Rate", y = "True positive rate")
 
+#get auc for model performance on test data
 auc(roc_obj_nrating_regression_test)
 ```
 
 
-mortgage_data_with_1pred <- mortgage_data %>% 
-  add_predictions(mortgage_1pred_model, type = "response") %>% 
-  mutate(predicted_accepted = pred >= 0.6)
 
-roc_obj_1_term <- mortgage_data_with_1pred %>% 
-  roc(response = accepted, predictor = pred)#predictor is the probability column
 
-ggroc(data = list(one_term = roc_obj_1_term, two_term = roc_obj_3_terms), legacy.axes = TRUE)+
-  labs(x = "False Positive Rate", y = "True positive rate")
-
-```{r}
-auc(roc_obj_nrating)
-```
 
 ## Compare Logistic regression with Random forest
 
 ```{r}
 #plot roc curves for both models on same graph
-ggroc(list(random_forest = roc_obj_nrating_tree, log_regression = roc_obj_nrating_regression_test))+
-  labs(x = "False Positive Rate", y = "True positive rate")
+ggroc(list("Random forest" = roc_obj_nrating_tree, "Logistic regression" = roc_obj_nrating_regression_test))+
+  labs(title = "True positive vs false positive rate for models",
+       x = "False Positive Rate", y = "True positive rate") +
+  scale_colour_manual(values = c("purple", "forest green"))
 
 #Get AUC for regression on test dataset
 auc(roc_obj_nrating_regression_test)
 
 #Get AUC for random forest performance on test dataset
 auc(roc_obj_nrating_tree)
+
+#Get AUC confidence intervals for regression
+ci.auc(roc_obj_nrating_regression_test)
+
+#Get AUC confidence intervals for random forest
+ci.auc(roc_obj_nrating_tree)
 ```
 

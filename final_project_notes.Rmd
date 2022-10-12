@@ -149,7 +149,12 @@ get_grouped_distance_means(dataset = green_spaces,
 ```{r}
 get_demographic_difference_graph(dataset = green_spaces,
                                  grouping_variable = age,
-                                 distance_variable = distance_to_nearest_green_or_blue_space)
+                                 distance_variable = distance_to_nearest_green_or_blue_space) +
+  labs(title = "Age differences in access to green space",
+       x = "Age",
+       y = "Mean percentage",
+       fill = "Distance to nearest green space")+
+  scale_fill_viridis_d()
 ```
 
 
@@ -181,7 +186,12 @@ get_grouped_distance_means(dataset = green_spaces,
 ```{r}
 get_demographic_difference_graph(dataset = green_spaces,
                                  grouping_variable = simd_quintiles,
-                                 distance_variable = distance_to_nearest_green_or_blue_space)
+                                 distance_variable = distance_to_nearest_green_or_blue_space)+
+  labs(title = "SIMD differences in access to green space",
+       x = "\nSIMD",
+       y = "Mean percentage",
+       fill = "Distance to nearest green space")+
+  scale_fill_viridis_d()
 ```
 
 
@@ -206,7 +216,12 @@ get_demographic_difference_graph(dataset = green_spaces,
 ```{r}
 get_demographic_difference_graph(dataset = green_spaces,
                                  grouping_variable = household_type,
-                                 distance_variable = distance_to_nearest_green_or_blue_space)
+                                 distance_variable = distance_to_nearest_green_or_blue_space)+
+    labs(title = "Household type differences in access to green space",
+       x = "Household type",
+       y = "Mean percentage",
+       fill = "Distance to nearest green space")+
+  scale_fill_viridis_d()
 ```
 
 ## Differences by ethnicity **
@@ -221,7 +236,12 @@ get_grouped_distance_means(dataset = green_spaces,
 ```{r}
 get_demographic_difference_graph(dataset = green_spaces,
                                  grouping_variable = ethnicity,
-                                 distance_variable = distance_to_nearest_green_or_blue_space)
+                                 distance_variable = distance_to_nearest_green_or_blue_space)+
+  labs(title = "Ethnicity differences in access to green space",
+       x = "\nEthnicity",
+       y = "Mean percentage",
+       fill = "Distance to nearest green space")+
+  scale_fill_viridis_d()
 ```
 
 ## Differences by urban/rural **
@@ -271,9 +291,14 @@ green_spaces %>%
            measurement == "Percent" & #filter out confidence interval values
            distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest
   ggplot(aes(x = simd_quintiles,
-             y = value))+
-  geom_boxplot()+
-  geom_jitter(alpha = 0.3)
+             y = value
+             ))+
+  geom_boxplot(aes(fill = simd_quintiles), show.legend = FALSE)+
+  geom_jitter(alpha = 0.3)+
+  labs(title = "SIMD differences in access to greenspace within 5 minutes",
+       x = "SIMD",
+       y = "Mean percentage")+
+  scale_fill_viridis_d()
 ```
 ### Two sample difference in means test
 ```{r}
@@ -331,8 +356,12 @@ green_spaces %>%
            distance_to_nearest_green_or_blue_space == "A 5 minute walk or less") %>% #specify 5 min walk as the value of interest
   ggplot(aes(x = ethnicity,
              y = value))+
-  geom_boxplot()+
-  geom_jitter(alpha = 0.3)
+  geom_boxplot(aes(fill = ethnicity), show.legend = FALSE)+
+  geom_jitter(alpha = 0.3)+
+  labs(title = "Ethnicity differences in access to greenspace within 5 minutes",
+       x = "Ethnicity",
+       y = "Mean percentage")+
+  scale_fill_viridis_d()
 ```
 ### Two sample difference in means test
 ```{r}
@@ -414,6 +443,7 @@ ggbetweenstats(
   y = value,
   type = "nonparametric"
 )
+
 ```
 We can see that the difference between the mean value of people 65+ who can access a green space within a 5 minute walk is significantly different from both the 16-34 y/o group and the 35-64 y/o group.
 
@@ -748,7 +778,7 @@ green_spaces %>%
 
 ## Cleaning/wrangling
 ```{r}
-#join green spaces
+#join la names
 neighbouhood_rating <- neighbouhood_rating %>% left_join(la_names, by = c("feature_code" = "ca")) %>% 
   mutate(ca_name = if_else(is.na(ca_name), "All Scotland", ca_name)) 
 ```
@@ -821,8 +851,12 @@ comb_neighbourhood_rating %>%
 filter(neighbourhood_binary == "Good") %>% 
   ggplot(aes(x = walking_distance_to_nearest_greenspace,
              y = mean_percentage))+
-  geom_boxplot() +
-  geom_jitter()
+  geom_boxplot(aes(fill = walking_distance_to_nearest_greenspace), show.legend = FALSE) +
+  geom_jitter()+
+  labs(title = "Relationship between good neighbourhood ratings and access to green spaces",
+       x = "\nWalking distance to nearest green space",
+       y = "Mean percentage of 'good' ratings")+
+  scale_fill_viridis_d()
 ```
 
 
@@ -888,7 +922,7 @@ filter(neighbourhood_binary == "Poor") %>%
   ggplot(aes(x = walking_distance_to_nearest_greenspace,
              y = mean_percentage))+
   geom_boxplot() +
-  geom_jitter()
+  geom_jitter() 
 ```
 
 
@@ -945,7 +979,7 @@ comb_neighbourhood_rating %>%
 
 ## Cleaning/wrangling
 ```{r}
-#join green spaces
+#join la names
 community_belonging <- community_belonging %>% left_join(la_names, by = c("feature_code" = "ca")) %>% 
   mutate(ca_name = if_else(is.na(ca_name), "All Scotland", ca_name)) 
 ```
@@ -1021,8 +1055,12 @@ comb_belonging %>%
 filter(belonging_binary == "Strong") %>% 
   ggplot(aes(x = walking_distance_to_nearest_greenspace,
              y = mean_percentage))+
-  geom_boxplot() +
-  geom_jitter()
+  geom_boxplot(aes(fill = walking_distance_to_nearest_greenspace), show.legend = FALSE) +
+  geom_jitter()+
+  labs(title = "Relationship between strong community belonging and access to green spaces",
+       x = "\nWalking distance to nearest green space",
+       y = "Mean percentage of 'strong' ratings")+
+  scale_fill_viridis_d()
 ```
 
 ### Two sample difference in means test - Strong belonging ratings
